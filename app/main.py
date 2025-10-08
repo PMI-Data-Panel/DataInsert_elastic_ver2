@@ -9,6 +9,8 @@ import re
 import traceback
 import json
 
+print("✅ 현재 실행 중인 main.py 경로:", os.path.abspath(__file__))
+
 # --- 모델 및 클라이언트 초기화 ---
 embedding_model = SentenceTransformer("nlpai-lab/KURE-v1")
 VECTOR_DIMENSIONS = 1024
@@ -20,7 +22,8 @@ es = Elasticsearch("http://localhost:9200")
 
 def create_index_if_not_exists(index_name: str):
     """
-    Elasticsearch에 특정 인덱스가 존재하지 않으면, '사용자' 단위의 nested 구조가 적용된 매핑으로 새 인덱스를 생성합니다.
+    Elasticsearch에 특정 인덱스가 존재하지 않으면, 
+    '사용자' 단위의 nested 구조가 적용된 매핑으로 새 인덱스를 생성합니다.
     """
     if not es.indices.exists(index=index_name):
         print(f"✨ '{index_name}' 인덱스가 없어 새로 생성합니다.")
@@ -51,6 +54,7 @@ def create_index_if_not_exists(index_name: str):
                 },
             }
         }
+
         try:
             es.indices.create(index=index_name, mappings=mappings)
             print(f"👍 '{index_name}' 인덱스 생성 완료 (사용자 단위 Nested 구조 적용).")
@@ -58,6 +62,7 @@ def create_index_if_not_exists(index_name: str):
             raise HTTPException(
                 status_code=500, detail=f"'{index_name}' 인덱스 생성 실패: {e}"
             )
+
 
 def parse_question_metadata(file_path: str) -> dict:
     metadata = {}
@@ -90,11 +95,11 @@ def read_root():
     return {"message": "설문 데이터 색인 API가 Elasticsearch와 함께 실행 중입니다!"}
 
 
-@app.post("/index-survey-data") 
+@app.post("/index-survey-data")
 def index_survey_data_by_user():
     question_file = "./data/question_list.csv"
     response_file = "./data/response_list_300.csv"
-    index_name = "survey_responses" # 새로운 데이터 구조를 위한 새 인덱스
+    index_name = "survey_responses"  # 새로운 데이터 구조를 위한 새 인덱스
 
     try:
         if not es.ping():
@@ -107,7 +112,7 @@ def index_survey_data_by_user():
 
         if es.indices.exists(index=index_name):
             es.indices.delete(index=index_name)
-            print(f"🗑️  기존 '{index_name}' 인덱스를 삭제했습니다.")
+            print(f"🗑️ 기존 '{index_name}' 인덱스를 삭제했습니다.")
         create_index_if_not_exists(index_name)
 
         questions_meta = parse_question_metadata(question_file)
@@ -149,14 +154,22 @@ def index_survey_data_by_user():
                     answer_codes = str(raw_answer).split(",")
                     for code in answer_codes:
                         code = code.strip()
-                        if code:
-                            answers_text_list.append(
-                                q_info["options"].get(code, f"알 수 없는 코드: {code}")
-                            )
+                        if not code:
+                            continue
+                        if code in q_info["options"]:
+                            answers_text_list.append(q_info["options"][code])  # 객관식
+                        else:
+                            answers_text_list.append(code)  # 주관식 직접 입력
+
                 elif q_type == "SINGLE":
-                    answers_text_list.append(
-                        q_info["options"].get(str(raw_answer).strip(), raw_answer)
-                    )
+                    answer_str = str(raw_answer).strip()
+                    if answer_str in q_info["options"]:
+                        answers_text_list.append(q_info["options"][answer_str])  # 객관식
+                    else:
+                        answers_text_list.append(answer_str)  # 주관식 직접 입력
+
+                elif q_type == "NUMERIC":
+                    answers_text_list.append(str(raw_answer))  # 숫자 그대로 저장
                 else:
                     answers_text_list.append(str(raw_answer))
 
@@ -164,19 +177,24 @@ def index_survey_data_by_user():
                 for answer_text in answers_text_list:
                     if answer_text is None or str(answer_text).strip() == "":
                         continue
-                    
-                    embedding_text = f"{q_text} 문항에 '{answer_text}'라고 응답"
-                    vector = embedding_model.encode(embedding_text).tolist()
 
-                    # Nested 객체 생성
                     qa_pair_doc = {
                         "q_code": q_code,
                         "q_text": q_text,
                         "q_type": q_type,
                         "answer_text": answer_text,
-                        "embedding_text": embedding_text,
-                        "answer_vector": vector,
                     }
+
+                    if (
+                        q_type.upper() != "NUMERIC"
+                        and answer_text not in q_info["options"].values()
+                    ):
+                        embedding_text = f"{q_text} 문항에 '{answer_text}'라고 응답"
+                        qa_pair_doc["embedding_text"] = embedding_text
+                        qa_pair_doc["answer_vector"] = embedding_model.encode(
+                            embedding_text
+                        ).tolist()
+
                     all_qa_pairs_for_user.append(qa_pair_doc)
 
             # 처리된 질문-응답 쌍이 있을 경우에만 최종 사용자 문서를 생성
@@ -191,18 +209,22 @@ def index_survey_data_by_user():
                 )
 
         if not actions:
-            print("⚠️  처리할 문서가 없습니다. 작업을 중단합니다.")
+            print("⚠️ 처리할 문서가 없습니다. 작업을 중단합니다.")
             return {"message": "처리할 데이터가 없습니다."}
 
-        print(
-            f"\n✅ 총 {len(actions)}개의 문서를 생성했습니다. (사용자 단위로 그룹화)"
-        )
+        print(f"\n✅ 총 {len(actions)}개의 문서를 생성했습니다. (사용자 단위로 그룹화)")
         print("--- 📄 첫 번째 사용자 문서 샘플 ---")
         print(json.dumps(actions[0]["_source"], indent=2, ensure_ascii=False))
         print("--------------------------------\n")
 
         print("⏳ Elasticsearch에 데이터 대량 삽입(bulk)을 시작합니다...")
-        success, failed = bulk(es, actions, raise_on_error=False, refresh=True)
+        success, failed = bulk(
+            es,
+            actions,
+            raise_on_error=False,
+            refresh=True,
+            request_timeout=300,  # ← 최대 300초(5분)까지 기다림
+        )
 
         print(f"🎉 작업 완료! 성공: {success}, 실패: {len(failed)}")
 
