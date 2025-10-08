@@ -1,0 +1,17 @@
+# API Framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# Elasticsearch
+elasticsearch==8.13.0
+eland==8.13.0
+
+# Data Handling
+pandas==2.2.2
+
+# AI & Machine Learning
+sentence-transformers>=2.7.0
+httpx==0.27.0
+
+# Utilities
+python-dotenv==1.0.1

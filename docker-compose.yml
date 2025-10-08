@@ -1,0 +1,43 @@
+services:
+  # 1. Elasticsearch 서비스
+  elasticsearch:
+    build: ./elasticsearch # 커스텀 Dockerfile로 nori 분석기 설치
+    container_name: elasticsearch_service
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200" # 로컬 PC와 연결할 포트
+    networks:
+      - elastic-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # 2. Kibana 서비스
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.14.1
+    container_name: kibana_service
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601" # 로컬 PC와 연결할 포트
+    networks:
+      - elastic-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  elastic-net:
+    driver: bridge
